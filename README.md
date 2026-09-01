@@ -1,11 +1,11 @@
-# ThoughtStream v2
+# ThoughtStream
 
 > Watch a local LLM "think" — token by token, with the next-token probability
 > distribution rendered live. v2 of the zero-dependency interpretability demo,
 > building on [ThoughtStream](../ThoughtStream) with the enhancements that turn
 > it from a one-off viewer into an analyzable tool.
 
-ThoughtStream v2 streams a prompt to a local Ollama instance and, for every token
+ThoughtStream streams a prompt to a local Ollama instance and, for every token
 the model emits, renders the **next-token probability distribution** (the tokens
 it was *considering*, and how likely each was) as a live bar chart, plus the
 chosen-token probability.
