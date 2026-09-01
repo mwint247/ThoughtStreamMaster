@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ThoughtStream v2 — watch an LLM think</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --txt: #c9d1d9; --muted: #8b949e; --accent: #6c5ce7;
+    --green: #3fb950; --amber: #d29922; --red: #f85149; --blue: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--txt);
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 14px;
+  }
+  #app { max-width: 1100px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; color: #fff; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .row { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; align-items: center; }
+  textarea {
+    width: 100%; min-height: 70px; background: var(--panel); color: var(--txt);
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px; resize: vertical;
+    font-family: inherit; font-size: 14px;
+  }
+  button, select, input[type=number] {
+    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    padding: 8px 14px; font-weight: 600; cursor: pointer; font-family: inherit;
+  }
+  select, input[type=number] { background: var(--panel); color: var(--txt); border: 1px solid var(--border); }
+  button.ghost { background: var(--panel); color: var(--txt); border: 1px solid var(--border); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .grid { display: grid; grid-template-columns: 1fr 420px; gap: 14px; }
+  @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+  .panel h3 { margin: 0 0 10px; font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+  #output { white-space: pre-wrap; line-height: 1.55; min-height: 220px; max-height: 46vh; overflow-y: auto; }
+  #output .tok { border-bottom: 1px dotted transparent; }
+  #output .tok:hover { border-bottom-color: var(--accent); }
+  .bar-row { display: flex; align-items: center; gap: 8px; margin: 5px 0; font-size: 12px; }
+  .bar-row .label { width: 130px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  .bar-row .track { flex: 1; background: #0d1117; border-radius: 4px; height: 14px; overflow: hidden; }
+  .bar-row .fill { height: 100%; background: var(--accent); }
+  .bar-row .fill.chosen { background: var(--green); }
+  .bar-row .fill.bchosen { background: var(--blue); }
+  .bar-row .pct { width: 46px; text-align: right; color: var(--muted); }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .conf { font-weight: 700; }
+  .status { font-size: 12px; color: var(--muted); margin-left: auto; }
+  .status.up { color: var(--green); } .status.down { color: var(--red); }
+  .legend { font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; margin: 0 4px 0 10px; }
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
+  .pill.ok { color: var(--green); border-color: var(--green); }
+  .pill.no { color: var(--red); border-color: var(--red); }
+  .saves { font-size: 12px; color: var(--muted); margin-top: 8px; max-height: 120px; overflow-y:auto; }
+  .saves div { padding: 3px 0; border-bottom: 1px solid var(--border); }
+  .warn { color: var(--amber); font-size: 12px; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>ThoughtStream v2</h1>
+    <span class="sub">watch an LLM think — token by token</span>
+    <span class="status" id="status">checking…</span>
+  </header>
+
+  <div class="row">
+    <select id="model"></select>
+    <select id="modelB" title="comparison model (only used in Compare mode)"></select>
+    <label class="sub">temp <input type="number" id="temp" value="0.7" step="0.1" min="0" max="2" style="width:60px"></label>
+    <label class="sub">top-K <input type="number" id="topk" value="8" step="1" min="1" max="20" style="width:54px"></label>
+    <label class="sub"><input type="checkbox" id="cmp"> Compare</label>
+    <button id="go">▶ Generate</button>
+    <button id="stop" class="ghost" disabled>■ Stop</button>
+    <button id="save" class="ghost" disabled>💾 Save</button>
+    <button id="export" class="ghost" disabled>⤓ Export JSON</button>
+  </div>
+
+  <textarea id="prompt" placeholder="Ask the model something…">Explain in one sentence why the sky is blue.</textarea>
+
+  <div class="grid">
+    <div class="panel">
+      <h3>Generated stream <span id="modellabel" class="pill"></span></h3>
+      <div id="output"></div>
+      <div class="meta" id="meta">—</div>
+      <div class="warn" id="warn" style="display:none"></div>
+    </div>
+    <div class="panel">
+      <h3>What it's considering (next-token distribution)</h3>
+      <div id="bars"><div class="meta">Generate to see the live next-token distribution.</div></div>
+      <div class="legend">
+        <span class="sw" style="background:var(--green)"></span> A chosen
+        <span class="sw" style="background:var(--accent)"></span> A alternatives
+        <span class="sw" style="background:var(--blue)"></span> B chosen
+      </div>
+      <div class="meta" id="confline">chosen-token probability: —</div>
+      <div id="barsB" style="margin-top:10px; display:none">
+        <div class="meta" style="color:var(--blue)">Model B next-token distribution (same prefix)</div>
+        <div id="barsBinner"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <h3>Saved runs</h3>
+    <div class="saves" id="saves"><div class="meta">No runs saved yet. Generate, then click Save.</div></div>
+  </div>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const output = $('output'), bars = $('bars'), meta = $('meta'), confline = $('confline'), status = $('status');
+  const barsB = $('barsB'), barsBinner = $('barsBinner'), warn = $('warn');
+
+  let currentRun = null; // captured tokens for save/export
+
+  // health + model list (with logprob support probe)
+  fetch('/api/health').then(r => r.json()).then(d => {
+    status.textContent = d.ollama === 'up' ? 'Ollama: up' : 'Ollama: down';
+    status.className = 'status ' + (d.ollama === 'up' ? 'up' : 'down');
+    const sel = $('model'), selB = $('modelB');
+    (d.models || []).forEach(m => {
+      const opt = document.createElement('option'); opt.value = m.name; opt.textContent = m.name + (m.logprobs ? '' : ' (no logprobs)');
+      sel.appendChild(opt); selB.appendChild(opt.cloneNode(true));
+    });
+    if (!sel.options.length) { sel.innerHTML = '<option>hermes3:8b</option>'; selB.innerHTML = '<option>hermes3:8b</option>'; }
+    sel.value = sel.options[0].value; selB.value = sel.options[0].value;
+  }).catch(() => { status.textContent = 'Ollama: down'; status.className = 'status down'; });
+
+  function loadRuns() {
+    fetch('/api/runs').then(r => r.json()).then(d => {
+      const el = $('saves');
+      if (!d.runs || !d.runs.length) { el.innerHTML = '<div class="meta">No runs saved yet. Generate, then click Save.</div>'; return; }
+      el.innerHTML = '';
+      d.runs.slice().reverse().forEach(r => {
+        const div = document.createElement('div');
+        div.textContent = `${r.savedAt || '?'} · ${r.model}${r.compare ? ' vs ' + r.modelB : ''} · ${r.tokens.length} tok · ${r.prompt.slice(0,40)}…`;
+        el.appendChild(div);
+      });
+    }).catch(() => {});
+  }
+  loadRuns();
+
+  let ctrl = null;
+  $('go').onclick = async () => {
+    output.innerHTML = ''; bars.innerHTML = '<div class="meta">streaming…</div>'; meta.textContent = '—'; confline.textContent = 'chosen-token probability: —';
+    barsB.style.display = 'none'; barsBinner.innerHTML = '';
+    warn.style.display = 'none';
+    $('go').disabled = true; $('stop').disabled = false; $('save').disabled = true; $('export').disabled = true;
+    const prompt = $('prompt').value;
+    const model = $('model').value;
+    const modelB = $('modelB').value;
+    const temperature = parseFloat($('temp').value);
+    const topk = Math.max(1, Math.min(20, parseInt($('topk').value) || 8));
+    const compare = $('cmp').checked;
+    $('modellabel').textContent = compare ? `${model}  vs  ${modelB}` : model;
+    currentRun = { prompt, model, modelB, compare, temperature, topk, tokens: [], startedAt: new Date().toISOString() };
+
+    const url = compare ? '/api/compare' : '/api/stream';
+    ctrl = new AbortController();
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt, model, modelB, temperature, top_logprobs: topk }),
+      signal: ctrl.signal
+    });
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', count = 0, started = performance.now();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const evt = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 2);
+        if (!evt.startsWith('data: ')) continue;
+        const obj = JSON.parse(evt.slice(6));
+        if (obj.token) {
+          const span = document.createElement('span');
+          span.className = 'tok'; span.textContent = obj.token;
+          output.appendChild(span);
+          output.scrollTop = output.scrollHeight;
+          count++;
+          currentRun.tokens.push({ token: obj.token, top: obj.top, confidence: obj.confidence, topB: obj.topB, confidenceB: obj.confidenceB });
+          renderBars(obj.top || [], obj.confidence, bars);
+          if (obj.confidence != null) confline.innerHTML = 'chosen-token probability: <span class="conf">' + (obj.confidence*100).toFixed(1) + '%</span>';
+          if (compare && obj.topB) { barsB.style.display = 'block'; renderBars(obj.topB, obj.confidenceB, barsBinner, true); }
+          if (obj.modelBError && warn.style.display === 'none') { warn.style.display = 'block'; warn.textContent = 'Model B: ' + obj.modelBError; }
+          if (obj.top && obj.top.length === 0 && warn.style.display === 'none') { warn.style.display='block'; warn.textContent='This model returned no logprobs for this token.'; }
+        }
+        if (obj.done) { meta.textContent = `${count} tokens · ${((performance.now()-started)/1000)|0}s`; finishRun(); return; }
+        if (obj.error) { bars.innerHTML = '<div class="meta" style="color:var(--red)">' + obj.error + '</div>'; finishRun(); return; }
+      }
+    }
+    finishRun();
+  };
+
+  function finishRun() {
+    $('go').disabled = false; $('stop').disabled = true;
+    if (currentRun && currentRun.tokens.length) { $('save').disabled = false; $('export').disabled = false; }
+  }
+
+  function renderBars(top, conf, target, isB) {
+    if (!top.length) { target.innerHTML = '<div class="meta">no logprobs for this token</div>'; return; }
+    target.innerHTML = '';
+    const max = Math.max(...top.map(t => t.p), 0.0001);
+    top.slice(0, 12).forEach(t => {
+      const pct = (t.p * 100);
+      const row = document.createElement('div');
+      row.className = 'bar-row';
+      const tok = t.token === '\n' ? '⏎' : (t.token === ' ' ? '·' : t.token);
+      const cls = t.chosen ? (isB ? 'fill bchosen' : 'fill chosen') : 'fill';
+      row.innerHTML = `<span class="label">${escapeHtml(tok)}</span>
+        <span class="track"><span class="${cls}" style="width:${(t.p/max*100).toFixed(1)}%"></span></span>
+        <span class="pct">${pct.toFixed(1)}%</span>`;
+      target.appendChild(row);
+    });
+  }
+  function escapeHtml(s){return s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+  $('stop').onclick = () => { if (ctrl) ctrl.abort(); $('go').disabled = false; $('stop').disabled = true; };
+  $('save').onclick = () => {
+    if (!currentRun) return;
+    fetch('/api/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(currentRun) })
+      .then(() => { loadRuns(); });
+  };
+  $('export').onclick = () => {
+    if (!currentRun) return;
+    const blob = new Blob([JSON.stringify(currentRun, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = `thoughtstream_${Date.now()}.json`; a.click();
+  };
+</script>
+</body>
+</html>
